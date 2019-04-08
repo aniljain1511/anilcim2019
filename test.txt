@@ -1,0 +1,619 @@
+
+<html>
+
+
+$rules = [
+			'event_id' => 'required|numeric',
+			'name' => 'required|max:50',
+			'email' => 'required|email|max:50',
+			'phone' => 'required|numeric',
+			'subject' => 'required|max:255',
+			'message' => 'required',
+        ];
+
+		$vdata = $request->all();
+
+		$validator = Validator::make($vdata,$rules);
+
+
+		if($validator->fails()){
+				 return Response::json(array(
+					'fail' => true,
+					'errors' => $validator->getMessageBag()->toArray()
+				));
+				exit;
+		}else{
+
+			$data = Array();
+
+			$data['name']= $request->name;
+			$data['event_id']= $request->event_id;
+			$data['email']= $request->email;
+			$data['phone']= $request->phone;
+			$data['subject']= $request->subject;
+			$data['message']= $request->message;
+			$data['created_at']= date("Y-m-d H:i:s");	
+
+			$this->events->insertEnquiry($data);
+
+			$events= $this->events->getEventById($request->event_id);
+
+			$merchantData = $users->getUserById($events->merchant_id);
+
+			Mail::send('emails.user.enquiry', ['name' => $data['name'],'listing_name' => $events->name] , function($message) use ($data) {
+					$message->to($data['email'], $data['name'])->subject('Thank you for your Enquiry');
+			});
+
+
+			if($events->contactemail!=''){
+				Mail::send('emails.merchant.enquiry', ['name' => $data['name'],'mname' => $events->contactname,'listing_name' => $events->name,'email'=>$data['email'],'phone'=>$data['phone'],'usubject'=>$data['subject'],'umessage'=>$data['message']] , function($message) use ($data,$events) {
+						$message->to($events->contactemail, $events->contactname)->subject('Here is an enquiry for you. Check it now.');
+				});
+				
+			}else{
+				Mail::send('emails.merchant.enquiry', ['name' => $data['name'],'mname' => $merchantData['name'],'listing_name' => $events->name,'email'=>$data['email'],'phone'=>$data['phone'],'usubject'=>$data['subject'],'umessage'=>$data['message']] , function($message) use ($data,$merchantData) {
+						$message->to($merchantData['email'], $merchantData['name'])->subject('Here is an enquiry for you. Check it now.');
+				});
+			}
+
+
+			return Response::json(array(
+				'success' => true
+			));
+			exit;
+		}
+
+
+
+/************************ Auth Service Provider *************/
+    public function boot(GateContract $gate)
+    {
+        parent::registerPolicies($gate);
+
+		$gate->before(function ($user) {
+			if ($user->role_id == 1) {
+				return true;
+			}
+		});
+
+        $gate->define('checkrole', function ($user, $moduleid) {
+
+			$allowedModules = explode(",",$user->module_ids);
+			if(in_array($moduleid,$allowedModules)){
+				return true;
+			}else{ 
+				return false;
+			}
+
+        });
+	}
+
+
+	/******************* balde ****************************/
+
+	@can('checkrole', Config::get('constants.ADMIN_MASTER_MODULE_ID'))
+
+	@endcan
+
+public function state()
+    {
+        return $this->belongsTo('App\State');
+    }
+	public function city()
+    {
+        return $this->belongsTo('App\City');
+    }
+	public function area()
+    {
+        return $this->belongsTo('App\Area');
+    }
+
+	public function eventfv()
+    {
+        return $this->hasMany('App\EventFV');
+    }
+
+	public function eventpackages(){
+		return $this->hasmany('App\EventPackage');
+	}
+
+namespace App\Repositories;
+
+use App\Area;
+use DB;
+use Cache;
+
+class AreaRepository
+{
+    /**
+     * Get all of the category 
+     *
+     * @return Collection
+     */
+
+    public function getAllAreas($city_id)
+    {
+
+		if(Cache::has('areas'.$city_id)) {
+			return Cache::get('areas'.$city_id);
+		}else{
+
+			$areaData = Area::where('deleted_status', 0)
+					->where('city_id', $city_id)
+                    ->orderBy('aname', 'asc')
+                    ->get();
+
+			Cache::put('areas'.$city_id, $areaData, 30);
+			return $areaData;
+		}
+    }
+
+	public function getAllActiveAreas($city_id)
+    {
+	
+		$areaData = Area::where('deleted_status', 0)
+					->where('city_id', $city_id)
+                    ->orderBy('aname', 'asc')
+                    ->get();
+		
+		return $areaData;
+
+    }
+
+	public function setAreaDataToCache($city_id)
+    {
+		$areaData = Area::where('deleted_status', 0)
+				->where('city_id', $city_id)
+				->orderBy('aname', 'asc')
+				->get();
+
+		Cache::put('areas'.$city_id, $areaData, 30);
+		return $areaData;
+    }
+
+	public function insertData($data,$city_id){
+		$id = DB::table('areas')->insertGetId($data);
+		$this->setAreaDataToCache($city_id);
+
+		return $id;
+	}
+
+	public function getAreaById($id){
+
+		return Area::where('id', $id)->get()->first();
+	}
+
+	public function updateData($data,$id,$city_id){
+		DB::table('areas')->where('id',$id)->update($data);
+		$this->setAreaDataToCache($city_id);
+	}
+
+	public function deleteArea($data,$id,$city_id){
+		DB::table('areas')->where('id',$id)->update($data);
+		$this->setAreaDataToCache($city_id);
+	}
+
+	public function getStateIdFromCityId($id){
+		$cityData = DB::table('cities')->find($id);
+		return $cityData->state_id;
+	}
+
+	public function getAllAreaList()
+    {
+		$areaData = Area::where('deleted_status', 0)
+				->orderBy('aname', 'asc')
+				->get();
+		return $areaData;	
+    }	
+
+}
+
+
+
+$eventReviewData = DB::table('user_reviews')
+		->join('events', 'events.id', '=', 'user_reviews.entity_id')
+		->join('users', 'users.id', '=', 'user_reviews.user_id')
+		->where('entity_id',$event_id)
+		->where('user_reviews.status',1)
+		->where('user_reviews.deleted_status',0)
+		->where('module_id',Config::get('constants.MODULES.EVENTS'))
+		->select('user_reviews.*', 'events.*','events.name as eventname','users.name','users.email','users.phone')
+		->orderBy('user_reviews.id', 'desc')
+		->get();
+
+
+			->leftJoin('countries', 'countries.id', '=', 'users.country_id')
+
+			->leftJoin('user_reviews', function ($join) {
+							$join->on('user_reviews.entity_id', '=', 'events.id')->where('user_reviews.status','=',1)->where('user_reviews.deleted_status','=',0)
+								 ->where('user_reviews.module_id', '=', Config::get('constants.MODULES.EVENTS'));
+					})
+
+
+			->skip(0)
+					->take(5)
+
+
+					DB::select("select 
+							SUM(catches) as catches,
+							SUM(runouts) as runouts,
+							SUM(stumpings) as stumpings,
+							SUM(hatricks) as hatricks,
+							SUM(tms.runs) as total_runs, 
+							SUM(tms.wickets) as wickets, 
+							SUM(tms.score_50) as score_50, 
+							SUM(tms.score_100) as score_100
+							from tournament_match_scores as tms
+							inner join tournament_matches as tm on tm.id = tms.match_id
+							where  player_id in (select id from tournament_players where (email = '$email' or phone = '$phone') and deleted_status=0) and tournament_id in (3,8)");
+
+/****************************** Routes***********************/
+
+//Area Routes
+	Route::get('area/{city_id}', 'AreaController@index');
+	Route::get('area/create/{city_id}', 'AreaController@create');
+	Route::post('area/{city_id}', 'AreaController@store');
+	Route::get('area/edit/{city_id}/{id}', 'AreaController@edit');
+	Route::post('area/{city_id}/{id}', 'AreaController@update');
+	Route::get('area/delete/{city_id}/{id}', 'AreaController@destroy');
+
+Route::get('event/{id}', function ($id,EventRepository $events) {
+	$entityData = $events->getEventById($id);
+	if(!isset($entityData)){
+		return redirect('sports-events');
+	}
+	$cleanname = cleanUrl($entityData->name);
+	return redirect('event/'.$id.'/'.$cleanname);
+})->where('id', '[0-9]+');
+
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use App\Area;
+use App\Http\Requests;
+use App\Http\Controllers\Controller;
+use App\Repositories\AreaRepository;
+use Elasticsearch\ClientBuilder;
+use Illuminate\Contracts\Routing\ResponseFactory;
+use Gate;
+use Config;
+
+class AreaController extends Controller
+{
+	protected $area;
+
+	protected $adminModuleId;
+	
+	private $form_rules = [
+        'aname' => 'required|string|max:50|unique:areas,aname,NULL,id,deleted_status,0',
+        'status' => 'required|integer'
+    ];
+
+	protected $client;
+
+
+
+	public function __construct(AreaRepository $area)
+    {
+        $this->area = $area;
+		$this->adminModuleId = Config::get('constants.ADMIN_MASTER_MODULE_ID');
+		//$this->client = ClientBuilder::create()->build();
+    }
+
+    /**
+     * Display a listing of the resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function index($city_id)
+    {
+        if (Gate::denies('checkrole',$this->adminModuleId)) {
+			return view('admin.errors.403');
+        }
+
+		return view('admin.area.index', [
+            'area' => $this->area->getAllAreas($city_id),
+			'city_id'=>$city_id,
+			'state_id'=>$this->area->getStateIdFromCityId($city_id),
+        ]);
+    }
+
+	public function getAreas($city_id)
+    {
+		  
+          $areas = $this->area->getAllActiveAreas($city_id);
+
+		  $defaultArray = Array();
+
+		  $defaultArray['id'] = 0;
+		  $defaultArray['city_id'] = $city_id;
+		  $defaultArray['aname'] = 'No Area';
+		  $areas[] = $defaultArray;
+
+		  return response()->json($areas);
+    }
+
+    /**
+     * Show the form for creating a new resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function create($city_id)
+    {
+		if (Gate::denies('checkrole',$this->adminModuleId)) {
+			return view('admin.errors.403');
+        }
+
+		return view('admin.area.create',[
+			'city_id'=>$city_id,
+        ]);
+       
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\Response
+     */
+    public function store(Request $request,$city_id)
+    {
+		if (Gate::denies('checkrole',$this->adminModuleId)) {
+			return view('admin.errors.403');
+        }
+
+		$this->form_rules['aname'] = 'required|string|max:50|unique:areas,aname,deleted_status,0,city_id,'.$city_id;
+
+        $this->validate($request, $this->form_rules);
+
+		$data = Array();
+
+		$data['aname']= $request->aname;
+		$data['city_id']= $city_id;
+		$data['status']= $request->status;
+
+		$areaId = $this->area->insertData($data, $city_id);
+
+		$params = [
+			'index' => 'area',
+			'type' => 'area_name',
+			'id' => $areaId,
+			'body' => $data
+		];
+
+		
+		//$response = $this->client->index($params);
+
+		$request->session()->flash('status', 'Area was successful!');
+
+        return redirect('admin/area/'.$city_id);
+    }
+
+    /**
+     * Display the specified resource.
+     *
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function show($id)
+    {
+        //
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     *
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function edit($city_id,$id)
+    {
+        if (Gate::denies('checkrole',$this->adminModuleId)) {
+			return view('admin.errors.403');
+        }
+		$area= $this->area->getAreaById($id);
+     
+        return view('admin.area.edit', compact('area','city_id'));
+    }
+
+    /**
+     * Update the specified resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function update(Request $request,$city_id,$id)
+    {
+		if (Gate::denies('checkrole',$this->adminModuleId)) {
+			return view('admin.errors.403');
+        }
+
+		$this->form_rules['aname'] = 'required|string|max:60|unique:areas,aname,'.$id.',id,deleted_status,0,city_id,'.$city_id;
+
+		$this->validate($request, $this->form_rules);
+
+		$data = Array();
+
+		$data['aname']= $request->aname;
+		$data['status']= $request->status;
+		$data['updated_at']= date("Y-m-d H:i:s");
+		$data['created_at']= date("Y-m-d H:i:s");
+
+		$this->area->updateData($data, $id, $city_id);
+
+		$data['city_id']= $city_id;
+
+		$params = [
+			'index' => 'city',
+			'type' => 'city_name',
+			'id' => $id,
+		];
+
+		$params['body']['doc'] = $data;
+
+		//$this->client->update($params);
+
+		$request->session()->flash('status', 'Area updated successful!');
+	
+		return redirect('admin/area/'.$city_id);
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     *
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function destroy($city_id,$id,Request $request)
+    {
+        if (Gate::denies('checkrole',$this->adminModuleId)) {
+			return view('admin.errors.403');
+        }
+
+		$data = Array();
+
+		$data['deleted_status']= 1;
+		$data['deleted_by']= $request->user()->id;
+		$data['deleted_at']= date("Y-m-d H:i:s");
+
+		$this->area->deleteArea($data, $id, $city_id);
+
+		$params = [
+			'index' => 'area',
+			'type' => 'area_name',
+			'id' => $id
+		];
+
+		//$response = $this->client->delete($params);
+
+		$request->session()->flash('status', 'Area deleted successful!');
+
+		return redirect('admin/area/'.$city_id);
+    }
+}
+
+
+
+/*************** Validate and redirect with url ****************/
+
+$rules['agree-this-condition'] = 'required';
+
+
+$vdata = $request->all();
+
+$validator = Validator::make($vdata,$rules);
+
+if($validator->fails()){
+		return redirect('event/form/'.$event_id.'/'.$package_id)
+		->withErrors($validator)
+		->withInput();
+}else{
+
+
+}
+
+
+/************* Middleware*************/
+
+
+namespace App\Http\Middleware;
+
+use Closure;
+use Auth;
+use DB;
+
+class SimpleAuthMiddleware
+{
+    /**
+     * Handle an incoming request.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @param  \Closure  $next
+     * @return mixed
+     */
+    public function handle($request, Closure $next)
+    {
+
+		$accesstoken = $request->header('X-Auth-Token');
+		$useraccesstoken = $request->header('X-Auth-User-Token');
+
+
+
+		$currentAction= $request->route()->getActionName();
+
+		list($controller,$action) = explode('@',$currentAction);
+
+		
+		if(isset($request->user_id) && $request->user_id!='' && $request->user_id!=0 && $action!='changePasswordApi'){
+
+			if($useraccesstoken!=''){
+
+				$usersexist = DB::table('users')->where('api_access_token', $useraccesstoken)->where('id', $request->user_id)->count();
+
+				if($usersexist == 0){
+					echo "invalid user access token";
+					exit;
+
+				}
+			}else{
+
+				echo "invalid user access token";
+				exit;
+			}
+		}
+	
+		$server_access_token = config('app.access_token');
+		
+		if($accesstoken != $server_access_token){
+			echo "unauthorized to access";
+			exit;
+		}
+		
+        return $next($request);
+    }
+}
+
+
+/******************* App Service Provider ****************/
+
+ public function register()
+    {
+        require_once __DIR__ . '/../Http/helpers.php';
+		
+    }
+
+
+$.ajaxSetup({
+			headers: {
+				'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
+			}
+	});
+
+
+	/******************* Form **************
+
+@extends('layouts.master')
+
+@section('content')
+
+	@include('common.errors')
+
+	<form >
+						{{ csrf_field() }}
+	</form>
+
+@endsection
+
+
+
+@include('admin.common.header')
+
+@include('admin.common.left')
+
+@yield('content')
+
+@include('admin.common.footer')
+
+</html>
